@@ -5,10 +5,10 @@ import torchvision.transforms as transforms
 from PIL import Image
 import time
 
-# YOLO 모델 초기화
-yolo_model = YOLO('yolov5s.pt')  # YOLO 모델
+# YOLO 얼굴 감지 모델 초기화 (YOLOv8-Face)
+yolo_model = YOLO('yolov8n.pt')  # YOLOv8 얼굴 감지 전용 모델
 
-# PyTorch 학습된 눈 감지 모델 로드
+# MobileNet 학습된 눈 감지 모델 로드
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 class EyeStateModel(torch.nn.Module):
@@ -28,11 +28,16 @@ eye_model.eval()
 # Transform 정의
 transform = transforms.Compose([
     transforms.Resize((128, 128)),
-    transforms.ToTensor()
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # MobileNet 정규화
 ])
 
 # OpenCV로 웹캠 연결
 cap = cv2.VideoCapture(0)
+
+# OpenCV 해상도 조정
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
 # 상태 추적 변수
 all_open_count = 0  # 모든 사람이 눈을 뜬 상태를 유지한 프레임 수
@@ -54,26 +59,33 @@ with torch.no_grad():
         for result in results:
             boxes = result.boxes
             for box in boxes:
-                x1, y1, x2, y2 = box.xyxy[0]  # 바운딩 박스 좌표
-                conf = box.conf[0]
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                conf = box.conf[0].item()
                 cls = int(box.cls[0])
 
-                if cls == 0:  # 'person' 클래스
+                # 신뢰도 및 크기 필터링
+                if cls == 0 and conf > 0.5 and (x2 - x1) > 50 and (y2 - y1) > 50:
+                    # 얼굴 영역 추출
                     face = frame[int(y1):int(y2), int(x1):int(x2)]
                     if face.size != 0:
                         pil_face = Image.fromarray(cv2.cvtColor(face, cv2.COLOR_BGR2RGB))
                         input_tensor = transform(pil_face).unsqueeze(0).to(device)
                         outputs = eye_model(input_tensor)
-                        _, predicted = torch.max(outputs, 1)
+                        probs = torch.nn.functional.softmax(outputs, dim=1)
+                        confidence, predicted = torch.max(probs, 1)
+                        
                         eye_state = "Closed" if predicted.item() == 0 else "Open"
 
-                        # 눈 상태가 "Closed"이면 all_open = False
-                        if eye_state == "Closed":
+                        # 신뢰도가 낮으면 "Unknown"으로 처리
+                        if confidence.item() < 0.7:
+                            eye_state = "Unknown"
+                        elif eye_state == "Closed":
                             all_open = False
 
                         # 바운딩 박스와 눈 상태 출력
                         cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                        cv2.putText(frame, eye_state, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+                        cv2.putText(frame, f"{eye_state} ({confidence.item():.2f})", (int(x1), int(y1) - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
         # 모든 사람이 눈을 뜬 상태인 경우
         if all_open:
@@ -102,6 +114,7 @@ with torch.no_grad():
                 # 타이머 종료 후 다시 초기화
                 timer_active = False
                 all_open_count = 0
+                capture_saved = False  # 캡처 상태 초기화
 
         # 프레임 출력
         cv2.imshow('YOLO Eye Detection', frame)
