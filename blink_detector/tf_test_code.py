@@ -4,7 +4,7 @@ import numpy as np
 from tensorflow.keras.models import load_model
 
 # 1. Load the trained model
-model = load_model("2018_12_17_22_58_35.h5", compile=False)
+model = load_model("model.h5", compile=False)
 
 # 2. Initialize dlib's face detector and shape predictor
 detector = dlib.get_frontal_face_detector()
