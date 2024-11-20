@@ -22,6 +22,8 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import zipfile
 from google.colab import drive
+import cv2
+import dlib
 
 # Colab Drive Mount
 drive.mount('/content/drive')
@@ -63,38 +65,59 @@ for _, row in attr_df.iterrows():
         print(f"파일을 찾을 수 없습니다: {src_path}")
 
 # Step 2: 데이터셋 클래스 정의
+
+# 얼굴 탐지기 및 랜드마크 모델 로드
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+
 class EyeStateDataset(Dataset):
-    def __init__(self, image_paths, labels, transform=None, height=128, width=128):
+    def __init__(self, image_paths, labels, transform=None):
         self.image_paths = image_paths
         self.labels = labels
         self.transform = transform
-        self.height = height
-        self.width = width
+
+    @staticmethod
+    def normalize(image):
+        """
+        이미지를 [-1, 1] 범위로 정규화하고 PyTorch 텐서로 변환.
+        """
+        image = image / 127.5 - 1  # 정규화
+        image = torch.tensor(image).permute(2, 0, 1)  # 채널 순서 변경
+        return image
+
+    def crop_eyes(self, image):
+        """
+        눈 부위를 크롭하는 함수.
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        faces = detector(gray)
+        for face in faces:
+            landmarks = predictor(gray, face)
+            left_eye = image[landmarks.part(37).y:landmarks.part(41).y, landmarks.part(36).x:landmarks.part(39).x]
+            right_eye = image[landmarks.part(43).y:landmarks.part(47).y, landmarks.part(42).x:landmarks.part(45).x]
+            return left_eye, right_eye
+        return None, None
+
+    def __getitem__(self, idx):
+        image_path = self.image_paths[idx]
+        label = self.labels[idx]
+        image = cv2.imread(image_path)
+        left_eye, right_eye = self.crop_eyes(image)
+        if left_eye is None or right_eye is None:
+            raise ValueError(f"Eyes not detected in image: {image_path}")
+        left_eye = self.normalize(left_eye)
+        right_eye = self.normalize(right_eye)
+        eyes = torch.cat((left_eye, right_eye), dim=0)
+        return eyes, label
 
     def __len__(self):
         return len(self.image_paths)
 
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        label = self.labels[idx]
-        image = self.preprocess(img_path, self.width, self.height)
-        return image, label
-
-    @staticmethod
-    def preprocess(image_path, w, h):
-        image = Image.open(image_path).convert("RGB")
-        x, y = image.size
-        image = image.resize((w, h), resample=Image.Resampling.LANCZOS)
-        image = np.array(image).astype(np.float32)
-        image = EyeStateDataset.normalize(image)
-        return image
-
-    @staticmethod
-    def normalize(image):
-        image = image / 127.5 - 1
-        image = torch.tensor(image).permute(2, 0, 1)
-        return image
-
+    """
+    만약 크롭된 눈 부위의 해상도가 낮으면 크기 조정 코드 넣기
+    resized_eye = cv2.resize(cropped_eye, (desired_width, desired_height))
+    """
+    
 # 데이터 경로 설정
 root_dir = 'data/train'
 all_image_paths = []
