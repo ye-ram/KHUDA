@@ -84,7 +84,6 @@ class EyeStateDataset(Dataset):
     def preprocess(image_path, w, h):
         image = Image.open(image_path).convert("RGB")
         x, y = image.size
-        image = transforms.CenterCrop(min(x, y))(image)
         image = image.resize((w, h), resample=Image.Resampling.LANCZOS)
         image = np.array(image).astype(np.float32)
         image = EyeStateDataset.normalize(image)
